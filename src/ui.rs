@@ -124,6 +124,7 @@ struct Core {
     sender_menu_draft: Cell<Option<usize>>,
     pending: Rc<Cell<Option<Action>>>,
     buttons: RefCell<BTreeMap<Action, ButtonInteractionState>>,
+    toolbar: ActionToolbarState<Action>,
     query: TextFieldInteractionState,
     search: TextField,
     list_scroll: RefCell<BTreeMap<Mailbox, ScrollState>>,
@@ -944,6 +945,7 @@ impl MailView {
                 sender_menu_draft: Cell::new(None),
                 pending: Rc::new(Cell::new(None)),
                 buttons: RefCell::new(BTreeMap::new()),
+                toolbar: ActionToolbarState::new(),
                 query,
                 search,
                 list_scroll: RefCell::new(BTreeMap::new()),
@@ -1429,87 +1431,84 @@ impl MailView {
             .paint(Layout::content(b, 48.0), c);
     }
     // Paint and input use exactly the same controls and frames at every width.
-    fn toolbar_items(&self, l: &Layout) -> Vec<(Action, Rect, Button)> {
-        let b = l.toolbar();
-        let x = b.origin.x;
-        let y = b.origin.y + 8.0;
-        let mut items = vec![];
+    fn action_toolbar(&self, l: &Layout) -> ActionToolbar<Action> {
         let compact_reader = l.width == Width::Compact && l.reader.is_some();
         let navigation = if compact_reader {
             (SymbolName::ChevronLeft, "Back to Messages", Action::Back)
         } else {
             (SymbolName::List, "Mailboxes", Action::Folders)
         };
-        items.push((
-            navigation.2,
-            rect(x + 12.0, y, 32.0, 32.0),
-            self.core.icon(navigation.0, navigation.1, navigation.2),
-        ));
+        let mut toolbar = ActionToolbar::new(self.core.toolbar.clone())
+            .context_key(
+                self.core
+                    .model
+                    .borrow()
+                    .selected
+                    .map_or(0, |id| (id as u64).wrapping_add(1)),
+            )
+            .leading(
+                navigation.2,
+                self.core.icon(navigation.0, navigation.1, navigation.2),
+            );
         if !compact_reader {
-            items.push((
+            toolbar = toolbar.leading(
                 Action::Refresh,
-                rect(x + 50.0, y, 32.0, 32.0),
                 self.core
                     .icon(SymbolName::Refresh, "Get Mail", Action::Refresh)
                     .enabled(self.core.worker.borrow().is_none()),
-            ));
+            );
             if l.width != Width::Compact {
-                items.push((
-                    Action::New,
-                    rect(x + 94.0, y + 1.0, 132.0, 30.0),
-                    self.core.new_message_button(false),
-                ));
+                toolbar = toolbar.leading(Action::New, self.core.new_message_button(false));
             }
-            items.push((
-                Action::Accounts,
-                rect(x + b.size.width - 92.0, y + 1.0, 80.0, 30.0),
-                self.core
-                    .button("Accounts", Action::Accounts)
-                    .enabled(self.core.worker.borrow().is_none()),
-            ));
         }
         if l.reader.is_some() {
             let active = self.core.model.borrow().selected.is_some();
-            let start = if compact_reader {
-                x + 58.0
-            } else {
-                x + b.size.width - 264.0
-            };
-            for (i, (symbol, label, action)) in [
+            for (symbol, label, action) in [
                 (SymbolName::ArrowBackward, "Reply", Action::Reply),
                 (SymbolName::ArrowForward, "Forward", Action::Forward),
                 (SymbolName::Trash, "Move to Trash", Action::Delete),
                 (SymbolName::More, "More", Action::Details),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                items.push((
+            ] {
+                toolbar = toolbar.trailing(
                     action,
-                    rect(start + i as f32 * 38.0, y, 32.0, 32.0),
                     self.core.icon(symbol, label, action).enabled(active),
-                ));
+                );
             }
             if compact_reader {
-                items.push((
+                toolbar = toolbar.trailing(
                     Action::New,
-                    rect(x + b.size.width - 42.0, y, 32.0, 32.0),
                     self.core
                         .icon(SymbolName::Pencil, "New Message", Action::New),
-                ));
+                );
             }
         }
-        items
-            .into_iter()
-            .map(|(action, bounds, button)| (action, bounds, button.toolbar()))
-            .collect()
+        if !compact_reader {
+            toolbar = toolbar.trailing(
+                Action::Accounts,
+                self.core
+                    .button("Accounts", Action::Accounts)
+                    .enabled(self.core.worker.borrow().is_none()),
+            );
+        }
+        toolbar
+    }
+    #[cfg(test)]
+    fn toolbar_items(&self, l: &Layout) -> Vec<(Action, Rect, Button)> {
+        let theme = Theme::current();
+        let mut text = appcore::viewkit::typography::TextMeasurer::new();
+        self.action_toolbar(l).into_visible_actions(
+            l.toolbar(),
+            &mut MeasureContext {
+                theme: &theme,
+                typography: &theme.typography,
+                text_measurer: &mut text,
+            },
+        )
     }
     fn toolbar(&self, l: &Layout, c: &mut PaintContext<'_>) {
         let b = l.toolbar();
         fill(b, c.theme.colors.surface_subtle, c);
-        for (_, frame, button) in self.toolbar_items(l) {
-            button.paint(frame, c);
-        }
+        self.action_toolbar(l).paint(b, c);
         line(
             rect(
                 b.origin.x,
@@ -2094,12 +2093,10 @@ impl View for MailView {
             return EventResult::Consumed;
         }
         if !l.composer {
-            for (_, frame, button) in self.toolbar_items(&l) {
-                let r = button.handle_event(frame, event, c);
-                if r.is_consumed() {
-                    self.flush(&l, b, c);
-                    return r;
-                }
+            let r = self.action_toolbar(&l).handle_event(l.toolbar(), event, c);
+            if r.is_consumed() {
+                self.flush(&l, b, c);
+                return r;
             }
         }
         if l.composer {
@@ -2233,11 +2230,11 @@ impl MailView {
                         .collect(),
                 });
             } else if a == Action::Details {
-                if let Some((_, frame, _)) = self
-                    .toolbar_items(l)
-                    .into_iter()
-                    .find(|(action, _, _)| *action == Action::Details)
-                {
+                if let Some(frame) = self.action_toolbar(l).action_bounds(
+                    &Action::Details,
+                    l.toolbar(),
+                    &mut c.measure_context(),
+                ) {
                     self.show_menu(
                         Point::new(frame.origin.x, frame.origin.y + frame.size.height),
                         c,
