@@ -1500,6 +1500,9 @@ impl MailView {
             }
         }
         items
+            .into_iter()
+            .map(|(action, bounds, button)| (action, bounds, button.toolbar()))
+            .collect()
     }
     fn toolbar(&self, l: &Layout, c: &mut PaintContext<'_>) {
         let b = l.toolbar();
