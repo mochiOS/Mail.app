@@ -1523,6 +1523,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mochi-user-platform",
+ "mochios-filesystem-protocol",
+ "mochios-fonts",
  "mochios-keychain-protocol",
  "mochios-posix-client",
  "mochios-posix-protocol",
@@ -1538,6 +1540,14 @@ version = "0.1.0"
 [[package]]
 name = "mochios-filesystem-protocol"
 version = "0.1.0"
+
+[[package]]
+name = "mochios-fonts"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "ttf-parser",
+]
 
 [[package]]
 name = "mochios-keychain-protocol"
@@ -1566,6 +1576,7 @@ name = "mochios-posix-protocol"
 version = "0.1.0"
 dependencies = [
  "mnu-abi",
+ "mochios-user-protocol",
 ]
 
 [[package]]
@@ -1579,6 +1590,10 @@ dependencies = [
  "webpki-roots",
  "x509-cert",
 ]
+
+[[package]]
+name = "mochios-user-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "mochios-viewkit-gpu-protocol"
@@ -3400,6 +3415,7 @@ dependencies = [
  "image",
  "mochi-user-platform",
  "mochi-user-syscall",
+ "mochios-fonts",
  "mochios-viewkit-gpu-protocol",
  "pollster",
  "postcard",
@@ -4280,10 +4296,6 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "mochios-user-database"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-user-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
