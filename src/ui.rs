@@ -3054,7 +3054,7 @@ mod tests {
         f.resize(1080.0);
         assert_eq!(f.view.core.model.borrow().selected, Some(3));
         f.resize(400.0);
-        f.click(Point::new(23.0, 22.0));
+        f.click_toolbar(Action::Back);
         assert_eq!(f.view.core.model.borrow().page, Page::List);
         f.paint();
         assert_eq!(scroll.offset_y(), 120.0);
@@ -3062,7 +3062,7 @@ mod tests {
     #[test]
     fn folder_drawer_blocks_the_underlying_mail_list_and_compose_wins_over_rows() {
         let f = Fixture::new(400.0);
-        f.click(Point::new(23.0, 22.0));
+        f.click_toolbar(Action::Folders);
         assert!(f.view.core.model.borrow().folders_open);
         let selected = f.view.core.model.borrow().selected;
         f.click(Point::new(390.0, 300.0));
