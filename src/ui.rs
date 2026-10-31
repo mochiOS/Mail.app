@@ -1843,7 +1843,8 @@ impl View for MailView {
             return;
         }
         let l = self.core.layout(b);
-        Surface::app().paint(b, c);
+        // Junction cutouts reveal the same chrome as the toolbar and sidebar.
+        Surface::sidebar().paint(b, c);
         if l.composer {
             self.composer(b, c);
             return;
@@ -2816,6 +2817,8 @@ mod tests {
             bounds,
             &mut PaintContext::new(&mut commands, &theme, &theme.typography, &mut text),
         );
+        assert!(commands.commands().iter().any(|command| matches!(command,
+            DrawCommand::FillRect { rect, color } if *rect == bounds && *color == theme.surface.sidebar_background)));
         assert!(commands.commands().iter().any(|command| matches!(command,
             DrawCommand::PushRoundedCornersClip { rect, radii } if *rect == pane && radii[0] == theme.radius.extra_large && radii[3] == theme.radius.extra_large)));
         assert!(!commands.commands().iter().any(|command| matches!(command,
