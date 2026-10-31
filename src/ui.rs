@@ -4,6 +4,7 @@ use crate::layout::{Layout, MESSAGE_ROW_HEIGHT, STATUS_HEIGHT, Width};
 use crate::model::{Folder, Mailbox, Model, Page};
 use crate::protocol::ImapFlag;
 use appcore::prelude::*;
+#[cfg(test)]
 use appcore::viewkit::draw_command::DrawCommand;
 use appcore::viewkit::event::{
     ContextMenuItem, ContextMenuRequest, EventContext, EventResult, ViewEvent,
@@ -207,6 +208,15 @@ struct Contents {
 }
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::new(x, y, w.max(0.0), h.max(0.0))
+}
+fn mail_pane_bounds(layout: &Layout) -> Option<Rect> {
+    let first = layout.list.or(layout.reader)?;
+    Some(rect(
+        first.origin.x,
+        first.origin.y,
+        layout.bounds.origin.x + layout.bounds.size.width - first.origin.x,
+        first.size.height,
+    ))
 }
 fn line(b: Rect, c: &mut PaintContext<'_>) {
     Rectangle::new()
@@ -1401,7 +1411,7 @@ impl MailView {
         result
     }
     fn folder_panel(&self, b: Rect, c: &mut PaintContext<'_>) {
-        fill(b, c.theme.colors.surface_subtle, c);
+        Surface::sidebar().paint(b, c);
         Text::label("Mailboxes")
             .color(c.theme.colors.text_secondary)
             .paint(
@@ -1506,39 +1516,10 @@ impl MailView {
         )
     }
     fn toolbar(&self, l: &Layout, c: &mut PaintContext<'_>) {
-        let b = l.toolbar();
-        fill(b, c.theme.colors.surface_subtle, c);
-        self.action_toolbar(l).paint(b, c);
-        line(
-            rect(
-                b.origin.x,
-                b.origin.y + b.size.height - 1.0,
-                b.size.width,
-                1.0,
-            ),
-            c,
-        );
+        Toolbar::new(self.action_toolbar(l)).paint(l.toolbar(), c);
     }
     fn list_header(&self, l: &Layout, b: Rect, c: &mut PaintContext<'_>) {
         let m = self.core.model.borrow();
-        let compact = l.width == Width::Compact;
-        Text::styled(
-            m.mailbox.folder.label(),
-            if compact {
-                TextRole::TitleLarge
-            } else {
-                TextRole::TitleSmall
-            },
-        )
-        .paint(
-            rect(
-                b.origin.x + 16.0,
-                b.origin.y + 12.0,
-                b.size.width - 32.0,
-                if compact { 32.0 } else { 24.0 },
-            ),
-            c,
-        );
         let count = if m.mailbox.folder == Folder::Drafts {
             self.core.drafts.borrow().len()
         } else {
@@ -1549,24 +1530,44 @@ impl MailView {
         } else {
             format!("{count} messages")
         };
-        single(
-            &summary,
-            TextRole::Caption,
+        let compact = l.width == Width::Compact;
+        let header = VStack::new()
+            .alignment(StackAlignment::Stretch)
+            .gap(StackGap::ExtraSmall)
+            .child(
+                Text::styled(
+                    m.mailbox.folder.label(),
+                    if compact {
+                        TextRole::TitleLarge
+                    } else {
+                        TextRole::TitleSmall
+                    },
+                )
+                .single_line(true),
+            )
+            .child(
+                Text::caption(summary)
+                    .single_line(true)
+                    .tone(TextTone::Secondary),
+            );
+        let search = l.search().unwrap();
+        Padding::only(
+            c.theme.spacing.small,
+            c.theme.spacing.large,
+            0.0,
+            c.theme.spacing.large,
+        )
+        .content(header)
+        .paint(
             rect(
-                b.origin.x + 16.0,
-                b.origin.y + if compact { 48.0 } else { 38.0 },
-                b.size.width - 32.0,
-                20.0,
+                b.origin.x,
+                b.origin.y,
+                b.size.width,
+                search.origin.y - b.origin.y - c.theme.spacing.small,
             ),
             c,
-            c.theme.colors.text_secondary,
-            false,
         );
-        if let Some(search) = l.search() {
-            self.core.search.paint(search, c);
-        }
-        let bottom = l.list_body().unwrap().origin.y;
-        line(rect(b.origin.x, bottom - 1.0, b.size.width, 1.0), c);
+        self.core.search.paint(search, c);
     }
     fn close_draft_button(&self) -> Button {
         self.core
@@ -1593,41 +1594,38 @@ impl MailView {
             button.leading_symbol(SymbolName::ArrowTopRight)
         }
     }
+    fn composer_header(&self, width: f32) -> HStack {
+        HStack::new()
+            .alignment(StackAlignment::Center)
+            .gap(StackGap::Small)
+            .child(self.close_draft_button().toolbar())
+            .child(
+                Text::label(if width >= 440.0 { "New Message" } else { "" })
+                    .single_line(true)
+                    .alignment(TextAlignment::Center)
+                    .layout()
+                    .flex_grow(1.0),
+            )
+            .child(self.send_button().toolbar())
+    }
     fn composer(&self, b: Rect, c: &mut PaintContext<'_>) {
         let frames = ComposeFrames::new(b);
-        fill(frames.toolbar, c.theme.colors.surface_subtle, c);
-        self.close_draft_button().paint(frames.close, c);
-        self.send_button().paint(frames.send, c);
-        if b.size.width >= 440.0 {
-            Text::label("New Message")
-                .alignment(TextAlignment::Center)
-                .paint(frames.title, c);
-        }
-        line(
-            rect(
-                b.origin.x,
-                b.origin.y + frames.toolbar.size.height - 1.0,
-                b.size.width,
-                1.0,
-            ),
-            c,
-        );
+        Surface::pane().paint(b, c);
+        Toolbar::new(self.composer_header(b.size.width)).paint(frames.toolbar, c);
         for (label, frame) in [
             ("From", frames.from),
             ("To", frames.to),
             ("Subject", frames.subject),
         ] {
-            Text::caption(label)
-                .color(c.theme.colors.text_secondary)
-                .paint(
-                    rect(
-                        frames.form.origin.x + 16.0,
-                        frame.origin.y + 5.0,
-                        56.0,
-                        22.0,
-                    ),
-                    c,
-                );
+            self.core.draft.subject_field.label(label).paint(
+                rect(
+                    frames.form.origin.x + 16.0,
+                    frame.origin.y,
+                    56.0,
+                    frame.size.height,
+                ),
+                c,
+            );
         }
         for y in [frames.to.origin.y - 1.0, frames.subject.origin.y + 35.0] {
             line(
@@ -1651,16 +1649,6 @@ impl MailView {
             .paint(frames.recipient_hint, c);
         self.core.draft.subject_field.paint(frames.subject, c);
         self.core.draft.editor.paint(frames.body, c);
-        fill(frames.footer, c.theme.colors.surface_subtle, c);
-        line(
-            rect(
-                frames.footer.origin.x,
-                frames.footer.origin.y,
-                frames.footer.size.width,
-                1.0,
-            ),
-            c,
-        );
         let status = self.core.status.borrow();
         let feedback = if status.is_empty() {
             if self.core.preview.get() {
@@ -1671,17 +1659,7 @@ impl MailView {
         } else {
             status.as_str()
         };
-        Text::caption(feedback)
-            .color(c.theme.colors.text_secondary)
-            .paint(
-                rect(
-                    frames.footer.origin.x + 12.0,
-                    frames.footer.origin.y + 4.0,
-                    frames.footer.size.width - 24.0,
-                    frames.footer.size.height - 8.0,
-                ),
-                c,
-            );
+        Toolbar::bottom(Text::metadata(feedback).single_line(true)).paint(frames.footer, c);
     }
     fn sender_button(&self) -> Button {
         let label = self
@@ -1701,7 +1679,7 @@ impl MailView {
                 HStack::new()
                     .alignment(StackAlignment::Center)
                     .gap(StackGap::Small)
-                    .child(Text::caption(label).layout().flex_grow(1.0))
+                    .child(Text::label(label).single_line(true).layout().flex_grow(1.0))
                     .child(Glyph(SymbolName::ChevronDown)),
             )
     }
@@ -1750,9 +1728,10 @@ impl MailView {
 }
 struct ComposeFrames {
     toolbar: Rect,
-    title: Rect,
     form: Rect,
+    #[cfg(test)]
     close: Rect,
+    #[cfg(test)]
     send: Rect,
     from: Rect,
     to: Rect,
@@ -1790,14 +1769,10 @@ impl ComposeFrames {
         let body_y = subject.origin.y + 44.0;
         Self {
             toolbar: rect(b.origin.x, b.origin.y, b.size.width, 48.0),
-            title: rect(
-                b.origin.x + 144.0,
-                b.origin.y + 12.0,
-                b.size.width - 256.0,
-                24.0,
-            ),
             form,
+            #[cfg(test)]
             close: rect(b.origin.x + 12.0, b.origin.y + 9.0, 120.0, 30.0),
+            #[cfg(test)]
             send: rect(
                 b.origin.x + b.size.width - 100.0,
                 b.origin.y + 9.0,
@@ -1858,7 +1833,7 @@ impl View for MailView {
         if self.core.worker.borrow().is_some() {
             c.request_redraw_at(Instant::now() + Duration::from_millis(50));
         }
-        fill(b, c.theme.colors.background, c);
+        Surface::app().paint(b, c);
         if self.core.form.open.get() {
             self.account_panel(b, c);
             return;
@@ -1868,65 +1843,39 @@ impl View for MailView {
             return;
         }
         let l = self.core.layout(b);
-        fill(b, c.theme.colors.background, c);
+        Surface::app().paint(b, c);
         if l.composer {
             self.composer(b, c);
             return;
         }
         if let Some(side) = l.sidebar {
             self.folder_panel(side, c);
-            line(
-                rect(
-                    side.origin.x + side.size.width,
-                    side.origin.y,
-                    1.0,
-                    side.size.height,
-                ),
-                c,
-            );
         }
-        if let Some(list) = l.list {
-            self.list_header(&l, list, c);
-            self.core
-                .scroll(Content::List)
-                .paint(l.list_body().unwrap(), c);
-            if l.reader.is_some() {
-                line(
-                    rect(
-                        list.origin.x + list.size.width,
-                        list.origin.y,
-                        1.0,
-                        list.size.height,
-                    ),
-                    c,
-                );
-            }
-        }
-        if let Some(reader) = l.reader {
-            if self.core.model.borrow().selected.is_some() {
-                self.core.scroll(Content::Reader).paint(reader, c);
-            } else {
-                let y = reader.origin.y + (reader.size.height - 64.0).max(0.0) / 2.0;
-                Text::label("No Message Selected")
-                    .alignment(TextAlignment::Center)
-                    .color(c.theme.colors.text_secondary)
-                    .paint(
-                        rect(reader.origin.x + 24.0, y, reader.size.width - 48.0, 24.0),
-                        c,
-                    );
-                Text::caption("Choose a message from the list.")
-                    .alignment(TextAlignment::Center)
-                    .color(c.theme.colors.text_secondary)
-                    .paint(
-                        rect(
-                            reader.origin.x + 24.0,
-                            y + 28.0,
-                            reader.size.width - 48.0,
-                            24.0,
-                        ),
-                        c,
-                    );
-            }
+        if let Some(pane) = mail_pane_bounds(&l) {
+            Surface::pane().in_container(b).paint_content(pane, c, |c| {
+                if let Some(list) = l.list {
+                    self.list_header(&l, list, c);
+                    self.core
+                        .scroll(Content::List)
+                        .paint(l.list_body().unwrap(), c);
+                }
+                if let Some(reader) = l.reader {
+                    if self.core.model.borrow().selected.is_some() {
+                        self.core.scroll(Content::Reader).paint(reader, c);
+                    } else {
+                        VStack::new()
+                            .alignment(StackAlignment::Center)
+                            .distribution(StackDistribution::Center)
+                            .gap(StackGap::Small)
+                            .child(Text::label("No Message Selected").tone(TextTone::Secondary))
+                            .child(
+                                Text::caption("Choose a message from the list.")
+                                    .tone(TextTone::Secondary),
+                            )
+                            .paint(reader, c);
+                    }
+                }
+            });
         }
         self.toolbar(&l, c);
         if let Some(frame) = l.floating_compose() {
@@ -1938,22 +1887,8 @@ impl View for MailView {
             b.size.width,
             STATUS_HEIGHT.min(b.size.height),
         );
-        fill(footer, c.theme.colors.surface_subtle, c);
-        line(
-            rect(footer.origin.x, footer.origin.y, footer.size.width, 1.0),
-            c,
-        );
-        Text::caption(self.core.status.borrow().clone())
-            .color(c.theme.colors.text_secondary)
-            .paint(
-                rect(
-                    b.origin.x + 12.0,
-                    footer.origin.y + 4.0,
-                    b.size.width - 24.0,
-                    footer.size.height - 8.0,
-                ),
-                c,
-            );
+        Toolbar::bottom(Text::metadata(self.core.status.borrow().clone()).single_line(true))
+            .paint(footer, c);
         if self.core.model.borrow().folders_open {
             fill(b, c.theme.colors.text_primary.with_alpha(40), c);
             let panel = rect(
@@ -2104,10 +2039,11 @@ impl View for MailView {
                 return EventResult::Consumed;
             }
             let frames = ComposeFrames::new(b);
-            let mut result = self
-                .close_draft_button()
-                .handle_event(frames.close, event, c);
-            result = result.merge(self.send_button().handle_event(frames.send, event, c));
+            let mut result = Toolbar::new(self.composer_header(b.size.width)).handle_event(
+                frames.toolbar,
+                event,
+                c,
+            );
             result = result.merge(self.sender_button().handle_event(frames.from, event, c));
             let recipient_focused = self.core.draft.to.is_focused();
             let before_to = self.core.draft.to.value();
@@ -2159,30 +2095,45 @@ impl View for MailView {
         if let Some(side) = l.sidebar {
             result = result.merge(self.folder_event(side, event, c));
         }
-        if l.list.is_some() {
-            let query = self.core.query.value();
-            result = result.merge(self.core.search.handle_event(l.search().unwrap(), event, c));
-            if query != self.core.query.value() {
-                self.core.scroll(Content::List).state().reset();
-                let ids = self.core.ids();
-                let mut m = self.core.model.borrow_mut();
-                if m.selected.is_some_and(|id| !ids.contains(&id)) {
-                    m.selected = None;
-                }
-                c.request_redraw_in(b);
-            }
-            result = result.merge(self.core.scroll(Content::List).handle_event(
-                l.list_body().unwrap(),
+        if let Some(pane) = mail_pane_bounds(&l) {
+            result = result.merge(Surface::pane().in_container(b).handle_content_event(
+                pane,
                 event,
                 c,
+                |event, c| {
+                    let mut result = EventResult::Ignored;
+                    if l.list.is_some() {
+                        let query = self.core.query.value();
+                        result = result.merge(self.core.search.handle_event(
+                            l.search().unwrap(),
+                            event,
+                            c,
+                        ));
+                        if query != self.core.query.value() {
+                            self.core.scroll(Content::List).state().reset();
+                            let ids = self.core.ids();
+                            let mut m = self.core.model.borrow_mut();
+                            if m.selected.is_some_and(|id| !ids.contains(&id)) {
+                                m.selected = None;
+                            }
+                            c.request_redraw_in(b);
+                        }
+                        result = result.merge(self.core.scroll(Content::List).handle_event(
+                            l.list_body().unwrap(),
+                            event,
+                            c,
+                        ));
+                    }
+                    if let Some(reader) = l.reader {
+                        result = result.merge(
+                            self.core
+                                .scroll(Content::Reader)
+                                .handle_event(reader, event, c),
+                        );
+                    }
+                    result
+                },
             ));
-        }
-        if let Some(reader) = l.reader {
-            result = result.merge(
-                self.core
-                    .scroll(Content::Reader)
-                    .handle_event(reader, event, c),
-            );
         }
         // Floating compose wins over the list below it, including its press capture.
         if let Some(frame) = l.floating_compose() {
@@ -2432,69 +2383,42 @@ impl Contents {
                     account,
                     folder: *folder,
                 };
-                let selected = m.mailbox == mailbox;
-                let mut row = HStack::new()
-                    .alignment(StackAlignment::Center)
-                    .gap(StackGap::Small);
                 let symbol = match folder {
-                    Folder::Inbox => Some(SymbolName::Tray),
-                    Folder::Unread => Some(SymbolName::Mail),
-                    Folder::Drafts => Some(SymbolName::Pencil),
-                    Folder::Trash => Some(SymbolName::Trash),
-                    Folder::Flagged => Some(SymbolName::Bookmark),
-                    Folder::Archive => Some(SymbolName::Folder),
-                    Folder::Sent => Some(SymbolName::ArrowTopRight),
+                    Folder::Inbox => SymbolName::Tray,
+                    Folder::Unread => SymbolName::Mail,
+                    Folder::Drafts => SymbolName::Pencil,
+                    Folder::Trash => SymbolName::Trash,
+                    Folder::Flagged => SymbolName::Bookmark,
+                    Folder::Archive => SymbolName::Folder,
+                    Folder::Sent => SymbolName::ArrowTopRight,
                 };
-                if let Some(symbol) = symbol {
-                    row = row.child(
-                        Icon::new(symbol)
-                            .size(theme.layout.compact_icon_size)
-                            .color(theme.colors.text_secondary)
-                            .frame(16.0, 16.0),
-                    );
-                } else {
-                    row = row.child(
-                        Rectangle::new()
-                            .color(RectangleColor::Custom(Color::TRANSPARENT))
-                            .frame(16.0, 16.0),
-                    );
-                }
-                row = row.child(Text::label(folder.label()).layout().flex_grow(1.0));
-                if *folder == Folder::Inbox || *folder == Folder::Unread {
-                    let n = m.unread(account);
-                    if n > 0 {
-                        row = row
-                            .child(Text::caption(n.to_string()).color(theme.colors.text_secondary));
-                    }
-                }
-                if *folder == Folder::Drafts && !self.core.drafts.borrow().is_empty() {
-                    row = row.child(Text::caption(self.core.drafts.borrow().len().to_string()));
-                }
-                let button = self
+                let action = Action::Box(mailbox);
+                let interaction = self
                     .core
-                    .button(folder.label(), Action::Box(mailbox))
-                    .accessibility_selected(selected)
-                    .style(ButtonStyle::Custom {
-                        background: if selected {
-                            theme.list.selected_background
-                        } else {
-                            Color::TRANSPARENT
-                        },
-                        hovered_background: if selected {
-                            theme.list.selected_background
-                        } else {
-                            theme.list.hovered_background
-                        },
-                        border: Color::TRANSPARENT,
-                        hovered_border: Color::TRANSPARENT,
-                        foreground: theme.list.foreground,
+                    .buttons
+                    .borrow_mut()
+                    .entry(action)
+                    .or_default()
+                    .clone();
+                let pending = self.core.pending.clone();
+                let count = match folder {
+                    Folder::Inbox | Folder::Unread => m.unread(account),
+                    Folder::Drafts => self.core.drafts.borrow().len(),
+                    _ => 0,
+                };
+                let row = SidebarItem::with_interaction(interaction, folder.label())
+                    .symbol(symbol)
+                    .selected(m.mailbox == mailbox)
+                    .trailing(if count > 0 {
+                        count.to_string()
+                    } else {
+                        String::new()
                     })
-                    .content(row)
-                    .radius(theme.button.radius);
+                    .on_select(move || pending.set(Some(action)));
                 stack = stack.child(
-                    Padding::symmetric(8.0, 0.0)
-                        .content(button)
-                        .frame(width, 32.0),
+                    Padding::symmetric(theme.spacing.small, 0.0)
+                        .content(row)
+                        .frame(width, theme.layout.control_height),
                 );
             }
         }
@@ -2507,7 +2431,7 @@ impl Contents {
             .alignment(StackAlignment::Stretch)
             .gap(StackGap::Medium);
         let Some(t) = m.selected.and_then(|id| m.thread(id)) else {
-            return Padding::all(28.0).content(
+            return Padding::all(theme.spacing.extra_large).content(
                 stack
                     .child(Text::styled("No Message Selected", TextRole::TitleSmall))
                     .child(
@@ -2516,7 +2440,7 @@ impl Contents {
                     ),
             );
         };
-        stack = stack.child(Text::styled(&t.subject, TextRole::TitleMedium));
+        stack = stack.child(Text::styled(&t.subject, TextRole::TitleSmall));
         for (n, message) in t.messages.iter().enumerate() {
             if n + 1 < t.messages.len() {
                 let expanded = m.expanded.contains(&(t.id, n));
@@ -2574,160 +2498,166 @@ impl Contents {
         let margin = if width > 760.0 {
             (width - 704.0) / 2.0
         } else {
-            24.0
+            theme.spacing.extra_large
         };
-        Padding::symmetric(margin, 24.0).content(stack)
+        Padding::symmetric(margin, theme.spacing.extra_large).content(stack)
     }
-    fn mail_button(&self, id: usize, theme: &Theme) -> Button {
+    fn mail_row(&self, id: usize, theme: &Theme) -> ListRow {
         let m = self.core.model.borrow();
         let t = m.thread(id).unwrap();
-        let selected = m.selected == Some(id);
-        self.core
-            .button(&t.subject, Action::Open(id))
-            .radius(CornerRadius::None)
-            .omochi(false)
-            .accessibility_role(AccessibilityRole::ListItem)
-            .accessibility_selected(selected)
-            .accessibility_label(format!(
-                "{}、{}、{}{}",
-                &t.messages.last().unwrap().sender,
-                &t.subject,
-                &t.time,
-                if t.unread { ", unread" } else { "" }
-            ))
-            .style(ButtonStyle::Custom {
-                background: if selected {
-                    theme.list.selected_background
-                } else {
-                    theme.list.background
-                },
-                hovered_background: if selected {
-                    theme.list.selected_background
-                } else {
-                    theme.list.hovered_background
-                },
-                border: Color::TRANSPARENT,
-                hovered_border: Color::TRANSPARENT,
-                foreground: theme.list.foreground,
-            })
-            .content_padding(false)
-            .content(MailRow {
-                core: self.core.clone(),
-                id,
-            })
+        let sender = t
+            .messages
+            .last()
+            .map_or("", |message| message.sender.as_str());
+        let label = format!(
+            "{sender}, {}, {}{}",
+            t.subject,
+            t.time,
+            if t.unread { ", unread" } else { "" }
+        );
+        let interaction = self
+            .core
+            .buttons
+            .borrow_mut()
+            .entry(Action::Open(id))
+            .or_default()
+            .clone();
+        let pending = self.core.pending.clone();
+        let mut heading = HStack::new()
+            .alignment(StackAlignment::Center)
+            .gap(StackGap::Small)
+            .child(
+                Text::body(sender)
+                    .single_line(true)
+                    .weight(if t.unread { 600 } else { 400 })
+                    .layout()
+                    .flex_grow(1.0),
+            )
+            .child(
+                Text::caption(&t.time)
+                    .single_line(true)
+                    .tone(TextTone::Secondary),
+            );
+        if t.unread {
+            heading = heading.child(
+                Ellipse::new()
+                    .color(EllipseColor::Custom(theme.list.status_marker))
+                    .frame(
+                        theme.layout.status_marker_size,
+                        theme.layout.status_marker_size,
+                    ),
+            );
+        }
+        let mut preview = HStack::new()
+            .alignment(StackAlignment::Center)
+            .gap(StackGap::Small)
+            .child(
+                Text::caption(&t.snippet)
+                    .single_line(true)
+                    .tone(TextTone::Secondary)
+                    .layout()
+                    .flex_grow(1.0),
+            );
+        if t.flagged {
+            preview = preview.child(Glyph(SymbolName::Bookmark));
+        }
+        if t.messages.len() > 1 {
+            preview = preview.child(
+                Text::caption(t.messages.len().to_string())
+                    .single_line(true)
+                    .tone(TextTone::Secondary),
+            );
+        }
+        ListRow::with_interaction(interaction, label)
+            .selected(m.selected == Some(id))
+            .content(
+                Padding::all(theme.list.row_padding).content(
+                    VStack::new()
+                        .alignment(StackAlignment::Stretch)
+                        .gap(StackGap::ExtraSmall)
+                        .child(heading)
+                        .child(
+                            Text::label(&t.subject)
+                                .single_line(true)
+                                .weight(if t.unread { 600 } else { 400 }),
+                        )
+                        .child(preview),
+                ),
+            )
+            .on_select(move || pending.set(Some(Action::Open(id))))
     }
+    fn messages(&self, theme: &Theme) -> Box<dyn View> {
+        let m = self.core.model.borrow();
+        if m.mailbox.folder == Folder::Drafts {
+            let drafts = self.core.drafts.borrow();
+            if drafts.is_empty() {
+                return empty_message_list("No Drafts", theme);
+            }
+            let mut list = List::new();
+            for (id, draft) in drafts.iter().rev() {
+                let id = *id;
+                let title = if draft.subject.is_empty() {
+                    "(No Subject)"
+                } else {
+                    &draft.subject
+                };
+                let interaction = self
+                    .core
+                    .buttons
+                    .borrow_mut()
+                    .entry(Action::ResumeDraft(id))
+                    .or_default()
+                    .clone();
+                let pending = self.core.pending.clone();
+                list = list.row(
+                    ListRow::with_interaction(interaction, title)
+                        .subtitle(if draft.to.is_empty() {
+                            "No recipient"
+                        } else {
+                            &draft.to
+                        })
+                        .on_select(move || pending.set(Some(Action::ResumeDraft(id))))
+                        .height(MESSAGE_ROW_HEIGHT),
+                );
+            }
+            return Box::new(list);
+        }
+        let ids = m.visible(&self.core.query.value());
+        if ids.is_empty() {
+            return empty_message_list(
+                if self.core.query.value().is_empty() {
+                    "No Messages"
+                } else {
+                    "No Matching Messages"
+                },
+                theme,
+            );
+        }
+        drop(m);
+        Box::new(
+            List::new().rows(
+                ids.into_iter()
+                    .map(|id| self.mail_row(id, theme).height(MESSAGE_ROW_HEIGHT)),
+            ),
+        )
+    }
+}
+fn empty_message_list(label: &str, theme: &Theme) -> Box<dyn View> {
+    Box::new(Padding::all(theme.spacing.large).content(Text::body(label).tone(TextTone::Secondary)))
 }
 impl View for Contents {
     fn measure(&self, c: Constraints, ctx: &mut MeasureContext<'_>) -> Size {
         match self.kind {
             Content::Folders => self.folders(c.maximum.width, ctx.theme).measure(c, ctx),
             Content::Reader => self.reader(c.maximum.width, ctx.theme).measure(c, ctx),
-            Content::List => {
-                let m = self.core.model.borrow();
-                let rows = m.visible(&self.core.query.value()).len();
-                let height = if m.mailbox.folder == Folder::Drafts {
-                    (self.core.drafts.borrow().len() as f32 * 96.0).max(160.0)
-                } else if rows == 0 {
-                    160.0
-                } else {
-                    rows as f32 * MESSAGE_ROW_HEIGHT
-                };
-                c.constrain(Size::new(c.maximum.width, height + 80.0))
-            }
+            Content::List => self.messages(ctx.theme).measure(c, ctx),
         }
     }
     fn paint(&self, b: Rect, c: &mut PaintContext<'_>) {
         match self.kind {
             Content::Folders => self.folders(b.size.width, c.theme).paint(b, c),
             Content::Reader => self.reader(b.size.width, c.theme).paint(b, c),
-            Content::List => {
-                let m = self.core.model.borrow();
-                if m.mailbox.folder == Folder::Drafts {
-                    let drafts = self.core.drafts.borrow();
-                    if drafts.is_empty() {
-                        Text::body("No Drafts")
-                            .color(c.theme.colors.text_secondary)
-                            .paint(
-                                rect(
-                                    b.origin.x + 20.0,
-                                    b.origin.y + 30.0,
-                                    b.size.width - 40.0,
-                                    80.0,
-                                ),
-                                c,
-                            );
-                    }
-                    for (i, (id, d)) in drafts.iter().rev().enumerate() {
-                        let label = if d.subject.is_empty() {
-                            "(No Subject)"
-                        } else {
-                            &d.subject
-                        };
-                        self.core
-                            .button(label, Action::ResumeDraft(*id))
-                            .content(
-                                VStack::new()
-                                    .gap(StackGap::Small)
-                                    .child(Text::body_emphasized(label))
-                                    .child(
-                                        Text::caption(if d.to.is_empty() {
-                                            "No recipient"
-                                        } else {
-                                            &d.to
-                                        })
-                                        .color(c.theme.colors.text_secondary),
-                                    ),
-                            )
-                            .paint(
-                                rect(
-                                    b.origin.x + 12.0,
-                                    b.origin.y + i as f32 * 96.0 + 8.0,
-                                    b.size.width - 24.0,
-                                    80.0,
-                                ),
-                                c,
-                            );
-                    }
-                    return;
-                }
-                let ids = m.visible(&self.core.query.value());
-                if ids.is_empty() {
-                    Text::body(if self.core.query.value().is_empty() {
-                        "No Messages"
-                    } else {
-                        "No Matching Messages"
-                    })
-                    .color(c.theme.colors.text_secondary)
-                    .paint(
-                        rect(
-                            b.origin.x + 20.0,
-                            b.origin.y + 30.0,
-                            b.size.width - 40.0,
-                            80.0,
-                        ),
-                        c,
-                    );
-                    return;
-                }
-                for (i, id) in ids.into_iter().enumerate() {
-                    let r = rect(
-                        b.origin.x,
-                        b.origin.y + i as f32 * MESSAGE_ROW_HEIGHT,
-                        b.size.width,
-                        MESSAGE_ROW_HEIGHT,
-                    );
-                    self.mail_button(id, c.theme).paint(r, c);
-                    line(
-                        rect(
-                            r.origin.x + 20.0,
-                            r.origin.y + MESSAGE_ROW_HEIGHT - 1.0,
-                            r.size.width - 40.0,
-                            1.0,
-                        ),
-                        c,
-                    );
-                }
-            }
+            Content::List => self.messages(c.theme).paint(b, c),
         }
     }
     fn handle_event(&self, b: Rect, event: &ViewEvent, c: &mut EventContext<'_>) -> EventResult {
@@ -2738,103 +2668,7 @@ impl View for Contents {
             Content::Reader => self
                 .reader(b.size.width, c.theme())
                 .handle_event(b, event, c),
-            Content::List => {
-                let m = self.core.model.borrow();
-                if m.mailbox.folder == Folder::Drafts {
-                    let mut result = EventResult::Ignored;
-                    for (i, (id, _)) in self.core.drafts.borrow().iter().rev().enumerate() {
-                        result = result.merge(
-                            self.core
-                                .button("Open Draft", Action::ResumeDraft(*id))
-                                .handle_event(
-                                    rect(
-                                        b.origin.x + 12.0,
-                                        b.origin.y + i as f32 * 96.0 + 8.0,
-                                        b.size.width - 24.0,
-                                        80.0,
-                                    ),
-                                    event,
-                                    c,
-                                ),
-                        );
-                    }
-                    return result;
-                }
-                let mut result = EventResult::Ignored;
-                for (i, id) in m.visible(&self.core.query.value()).into_iter().enumerate() {
-                    result = result.merge(self.mail_button(id, c.theme()).handle_event(
-                        rect(
-                            b.origin.x,
-                            b.origin.y + i as f32 * MESSAGE_ROW_HEIGHT,
-                            b.size.width,
-                            MESSAGE_ROW_HEIGHT,
-                        ),
-                        event,
-                        c,
-                    ));
-                }
-                result
-            }
-        }
-    }
-}
-struct MailRow {
-    core: Rc<Core>,
-    id: usize,
-}
-impl View for MailRow {
-    fn measure(&self, c: Constraints, _: &mut MeasureContext<'_>) -> Size {
-        c.constrain(Size::new(c.maximum.width, MESSAGE_ROW_HEIGHT))
-    }
-    fn paint(&self, b: Rect, c: &mut PaintContext<'_>) {
-        let m = self.core.model.borrow();
-        let Some(t) = m.thread(self.id) else { return };
-        let x = b.origin.x + 20.0;
-        let w = b.size.width - 40.0;
-        let y = b.origin.y + 10.0;
-        single(
-            &t.messages.last().unwrap().sender,
-            TextRole::Body,
-            rect(x, y, w - 64.0, 22.0),
-            c,
-            c.theme.colors.text_primary,
-            t.unread,
-        );
-        Text::caption(&t.time)
-            .alignment(TextAlignment::End)
-            .color(c.theme.colors.text_secondary)
-            .paint(rect(x + w - 60.0, y + 2.0, 60.0, 20.0), c);
-        single(
-            &t.subject,
-            TextRole::Label,
-            rect(x, y + 22.0, w, 20.0),
-            c,
-            c.theme.colors.text_primary,
-            t.unread,
-        );
-        single(
-            &t.snippet,
-            TextRole::Caption,
-            rect(x, y + 44.0, w - if t.flagged { 50.0 } else { 0.0 }, 20.0),
-            c,
-            c.theme.colors.text_secondary,
-            false,
-        );
-        if t.flagged {
-            Text::caption("Flagged")
-                .color(c.theme.colors.text_secondary)
-                .alignment(TextAlignment::End)
-                .paint(rect(x + w - 48.0, y + 44.0, 48.0, 20.0), c);
-        }
-        if t.unread {
-            Ellipse::new()
-                .color(EllipseColor::Custom(c.theme.list.status_marker))
-                .paint(rect(b.origin.x + 7.0, y + 7.0, 6.0, 6.0), c);
-        }
-        if t.messages.len() > 1 {
-            Text::caption(t.messages.len().to_string())
-                .color(c.theme.colors.text_secondary)
-                .paint(rect(b.origin.x + 5.0, y + 29.0, 12.0, 18.0), c);
+            Content::List => self.messages(c.theme()).handle_event(b, event, c),
         }
     }
 }
@@ -2846,39 +2680,11 @@ fn single(
     color: Color,
     bold: bool,
 ) {
-    let weight = if bold { 600 } else { 400 };
-    let text = Text::styled(value, role).weight(weight).color(color);
-    c.display_list.push(DrawCommand::PushClip { rect: b });
-    if text.measure_unbounded(c.text_measurer).width <= b.size.width {
-        text.paint(b, c);
-    } else {
-        let chars: Vec<_> = value
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain(std::iter::once(value.len()))
-            .collect();
-        let mut low = 0;
-        let mut high = chars.len() - 1;
-        while low < high {
-            let mid = (low + high + 1) / 2;
-            let label = format!("{}…", &value[..chars[mid]]);
-            if Text::styled(label, role)
-                .weight(weight)
-                .measure_unbounded(c.text_measurer)
-                .width
-                <= b.size.width
-            {
-                low = mid;
-            } else {
-                high = mid - 1;
-            }
-        }
-        Text::styled(format!("{}…", &value[..chars[low]]), role)
-            .weight(weight)
-            .color(color)
-            .paint(b, c);
-    }
-    c.display_list.push(DrawCommand::PopClip);
+    Text::styled(value, role)
+        .weight(if bold { 600 } else { 400 })
+        .color(color)
+        .single_line(true)
+        .paint(b, c);
 }
 
 struct Glyph(SymbolName);
@@ -2956,6 +2762,107 @@ mod tests {
         fn resize(&self, width: f32) {
             self.bounds.set(Rect::new(0.0, 0.0, width, 640.0));
             self.paint();
+        }
+    }
+    #[test]
+    fn message_selection_uses_viewkits_active_and_inactive_foreground() {
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            for active in [true, false] {
+                let f = Fixture::new(1080.0);
+                let id = f.view.core.model.borrow().selected.unwrap();
+                let sender = f
+                    .view
+                    .core
+                    .model
+                    .borrow()
+                    .thread(id)
+                    .unwrap()
+                    .messages
+                    .last()
+                    .unwrap()
+                    .sender
+                    .clone();
+                let contents = Contents {
+                    core: f.view.core.clone(),
+                    kind: Content::List,
+                };
+                let mut commands = DisplayList::new();
+                let mut text = TextMeasurer::new();
+                let mut context =
+                    PaintContext::new(&mut commands, &theme, &theme.typography, &mut text)
+                        .with_window_active(active);
+                contents
+                    .mail_row(id, &theme)
+                    .paint(rect(0.0, 0.0, 320.0, MESSAGE_ROW_HEIGHT), &mut context);
+                let expected = if active {
+                    theme.list.selected_foreground
+                } else {
+                    theme.list.inactive_selected_foreground
+                };
+                assert!(commands.commands().iter().any(|command| matches!(command,
+                    DrawCommand::DrawText { command } if command.text == sender && command.color == expected)));
+            }
+        }
+    }
+    #[test]
+    fn mail_panes_share_one_continuous_clip_without_an_outline_border() {
+        let f = Fixture::new(1080.0);
+        let bounds = f.bounds.get();
+        let pane = mail_pane_bounds(&f.view.core.layout(bounds)).unwrap();
+        let theme = Theme::current();
+        let mut text = TextMeasurer::new();
+        let mut commands = DisplayList::new();
+        f.view.paint(
+            bounds,
+            &mut PaintContext::new(&mut commands, &theme, &theme.typography, &mut text),
+        );
+        assert!(commands.commands().iter().any(|command| matches!(command,
+            DrawCommand::PushRoundedCornersClip { rect, radii } if *rect == pane && radii[0] == theme.radius.extra_large && radii[3] == theme.radius.extra_large)));
+        assert!(!commands.commands().iter().any(|command| matches!(command,
+            DrawCommand::StrokeInsideRoundedRect { rect, .. } if *rect == pane)));
+    }
+
+    #[test]
+    fn composer_labels_align_with_sender_recipient_and_subject_text() {
+        let f = Fixture::new(1080.0);
+        with_accounts(&f);
+        f.view.core.apply(Action::New, true);
+        f.view.core.draft.to.set_value("recipient@example.test");
+        f.view.core.draft.subject.set_value("Subject value");
+        let sender = f
+            .view
+            .core
+            .model
+            .borrow()
+            .account_label(f.view.core.sender.get())
+            .to_owned();
+        let theme = Theme::current();
+        let mut text = TextMeasurer::new();
+        let mut commands = DisplayList::new();
+        f.view.paint(
+            f.bounds.get(),
+            &mut PaintContext::new(&mut commands, &theme, &theme.typography, &mut text),
+        );
+        for (label, value) in [
+            ("From", sender.as_str()),
+            ("To", "recipient@example.test"),
+            ("Subject", "Subject value"),
+        ] {
+            let find = |value: &str| {
+                commands
+                    .commands()
+                    .iter()
+                    .find_map(|command| match command {
+                        DrawCommand::DrawText { command } if command.text == value => Some(command),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let label = find(label);
+            let value = find(value);
+            assert_eq!(label.bounds.origin.y, value.bounds.origin.y);
+            assert_eq!(label.font_size, value.font_size);
+            assert_eq!(label.line_height, value.line_height);
         }
     }
     #[test]
