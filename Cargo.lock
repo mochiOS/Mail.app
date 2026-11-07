@@ -1578,6 +1578,7 @@ dependencies = [
  "mochios-filesystem-protocol",
  "mochios-net-device-protocol",
  "mochios-posix-protocol",
+ "sha2",
 ]
 
 [[package]]
@@ -1598,6 +1599,7 @@ dependencies = [
  "rustls-rustcrypto",
  "webpki-roots",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]
