@@ -7,9 +7,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-appcore = { package = "mochios-appcore", path = "../../tools/devkit/crates/appcore" }
+appcore = { package = "mochios-appcore", git = "https://github.com/mochiOS/devkit" }
 
-mochios-tls-client = { path = "../../user/crates/tls-client" }
+mochios-tls-client = { git = "https://github.com/mochiOS/syscalls" }
 getrandom = { version = "0.2.17", features = ["custom"] }
 base64 = "0.22"
 mailparse = "0.16.1"
@@ -32,8 +32,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("mochios
 
 
 [target.'cfg(target_os = "mochios")'.dependencies]
-mochi-user-platform = { path = "../../user/crates/platform", default-features = false, features = ["std"] }
-mochios-net-device-protocol = { path = "../../user/crates/net-device-protocol" }
+mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", default-features = false, features = ["std"] }
+mochios-net-device-protocol = { git = "https://github.com/mochiOS/syscalls" }
 
 [dev-dependencies]
 rcgen = "0.14"
